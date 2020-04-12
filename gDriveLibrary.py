@@ -4,20 +4,23 @@ explain client secret(how to replace it if needed) : https://developers.google.c
 download : the ile is chucked with pieces of ~100MB, need to download at least this amount beore appearing on screen
 """
 import re
-
+import os
 from googleapiclient.http import MediaIoBaseDownload
+from tqdm import tqdm
 
 
 # get download folder from user :
 # https://stackoverflow.com/questions/35851281/python-finding-the-users-downloads-folder
 
 
-def get_Gdrive_folder_id(drive, driveService, name):  # return ID of folder, create it if missing
+def get_Gdrive_folder_id(drive, driveService, name, parent="root"):  # return ID of folder, create it if missing
     body = {'title': name,
             'mimeType': "application/vnd.google-apps.folder"
             }
     query = "title='Temp folder for script' and mimeType='application/vnd.google-apps.folder'" \
-            " and 'root' in parents and trashed=false"
+            " and '" + parent + "' in parents and trashed=false"
+    if parent != "root":
+        query += "and driveId='" + parent + "' and includeItemsFromAllDrives=true and supportsAllDrives = true"
     listFolders = drive.ListFile({'q': query})
     for subList in listFolders:
         if subList == []:  # if folder doesn't exist, create it
@@ -54,17 +57,17 @@ def extract_files_id(links, drive):
         print(links)
 
 
-def copy_file(drive, id):
-    fileOriginMetaData = drive.auth.service.files().get(fileId=id).execute()
+def copy_file(drive, fileId, parentFolder = "root"): #if different parentFolder, input the folder ID
+    fileOriginMetaData = drive.auth.service.files().get(fileId=fileId).execute()
     """remove 4 last characters of the original file name 
     and add file extension(should be .rar) in case the file extension is missing from the name """
     nameNoExtension = ".".join(fileOriginMetaData['originalFilename'].split(".")[:-1])
     newFileName = nameNoExtension + "." + fileOriginMetaData['fileExtension']
-    print("name of the file on your google drive and on the disk: " + newFileName)
-    folderID = get_Gdrive_folder_id(drive, drive.auth.service, "Temp folder for script")
+    print("Name of the file on your google drive and on the disk: " + newFileName)
+    folderID = get_Gdrive_folder_id(drive, drive.auth.service, "Temp folder for script", parentFolder)
     copiedFileMetaData = {"parents": [{"id": str(folderID)}], 'title': newFileName}  # ID of destination folder
     copiedFile = drive.auth.service.files().copy(
-        fileId=id,
+        fileId=fileId,
         body=copiedFileMetaData
     ).execute()
     return copiedFile
@@ -73,17 +76,26 @@ def copy_file(drive, id):
 def download_file(drive, file, destFolder):
     copiedFileMedia = drive.auth.service.files().get_media(fileId=file['id'])
     newFileName = file['title']
-    print("download in progress. File size : " + sizeof_file(int(file['fileSize'])))
-    file = open(destFolder + "\\" + newFileName, "wb+")
+    defaultPath = destFolder + "\\" + newFileName
+    fullPath = generate_path_with_unique_filename(destFolder, newFileName)
+    if defaultPath != fullPath :
+        print("File already exist in the disk, new path: " + fullPath)
+    print("Download in progress. File size: " + sizeof_file(int(file['fileSize'])))
+
+    step = 104857600//1048576
+    fsize = int(file['fileSize'])//1048576
+
+    file = open(fullPath, "wb+")
     downloader = MediaIoBaseDownload(file, copiedFileMedia, chunksize=104857600)  # change chunksize here
     done = False
 
+    pbar = tqdm(desc='Downloading', unit='MB', total=fsize)
     while done is False:
         status, done = downloader.next_chunk()
-        print("\rDownload %d%%" % int(status.progress() * 100), end="")
+        pbar.update(step)
+    pbar.close()
     file.close()
-    print("\ndownload completed : " + newFileName)
-
+    print("\nDownload completed : " + newFileName)
 
 def delete_file(drive, id):
     drive.auth.service.files().delete(fileId=id).execute()
@@ -96,5 +108,12 @@ def sizeof_file(num, suffix='B'):
         num /= 1024.0
     return "%.1f%s%s" % (num, 'Yi', suffix)
 
-if __name__ == '__main__':
-    sizeof_file((31000))
+def generate_path_with_unique_filename(folder, filename):
+    fullpath = folder + "\\" + filename
+    if not os.path.exists(fullpath):
+        return fullpath
+    fileNumber = 1
+    while(os.path.exists(fullpath)):
+        fullpath = folder + "\\" + str(fileNumber) + filename
+        fileNumber+=1
+    return fullpath
